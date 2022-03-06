@@ -228,7 +228,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tungstenite",
- "url",
 ]
 
 [[package]]
