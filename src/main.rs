@@ -1,11 +1,11 @@
+use anyhow::Result;
 use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use tungstenite::{connect, Message};
-
-use std::sync::mpsc;
 
 #[derive(Serialize, Deserialize)]
 struct BidAsk {
@@ -13,7 +13,7 @@ struct BidAsk {
     event_type: String,
     #[serde(with = "rust_decimal::serde::float")]
     price: Decimal,
-    amount: f64, //CHANGE TO USIZE
+    amount: f64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -85,7 +85,7 @@ fn get_highest(map: &HashMap<Decimal, f64>) -> Decimal {
         .collect::<Vec<Decimal>>()
         .iter()
         .max()
-        .unwrap()
+        .expect("map contains no keys")
 }
 
 fn get_lowest(map: &HashMap<Decimal, f64>) -> Decimal {
@@ -94,30 +94,28 @@ fn get_lowest(map: &HashMap<Decimal, f64>) -> Decimal {
         .collect::<Vec<Decimal>>()
         .iter()
         .min()
-        .unwrap()
+        .expect("map contains no keys")
 }
 
-fn read_socket(tx: &mpsc::Sender<String>) {
+fn read_socket(tx: &mpsc::Sender<String>) -> Result<()> {
     let mut bids: HashMap<Decimal, f64> = HashMap::new();
     let mut asks: HashMap<Decimal, f64> = HashMap::new();
 
     let (mut socket, _response) =
         connect("wss://test.deribit.com/ws/api/v2/").expect("Connection error");
-    socket
-        .write_message(Message::Text(REQUEST.to_string()))
-        .unwrap();
+    socket.write_message(Message::Text(REQUEST.to_string()))?;
 
     socket
         .read_message()
         .expect("Error reading subscription confirmation");
     let msg = socket.read_message().expect("Reading error");
-    let parsed: Delta = serde_json::from_str(&Message::into_text(msg).unwrap()).unwrap();
+    let parsed: Delta = serde_json::from_str(&Message::into_text(msg)?)?;
     handle(&parsed, &mut bids, &mut asks);
     let mut old_id: Option<usize> = Some(parsed.params.data.change_id);
 
     loop {
         let msg = socket.read_message().expect("Reading error");
-        let parsed: Delta = serde_json::from_str(&Message::into_text(msg).unwrap()).unwrap();
+        let parsed: Delta = serde_json::from_str(&Message::into_text(msg)?)?;
         if parsed.params.data.prev_change_id != old_id {
             break;
         } else {
@@ -127,22 +125,24 @@ fn read_socket(tx: &mpsc::Sender<String>) {
         let best_bid = get_highest(&bids);
         let best_ask = get_lowest(&asks);
         let line = format!(
-            "Best bid price: {0}, count: {1}. Best ask price: {2}, count: {3}",
+            "Best bid price: {0}, count: {1}. Best ask price: {2}, amount: {3}",
             best_bid, bids[&best_bid], best_ask, asks[&best_ask]
         );
-        tx.send(line).unwrap();
+        tx.send(line)?;
     }
-    read_socket(&tx);
+    read_socket(&tx)?;
+    Ok(())
 }
 
-fn main() {
+fn main() -> Result<()> {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(1));
-        let line = rx.recv().unwrap();
+        let line = rx.recv().expect("Internal channel error");
         println!("{}", line);
     });
 
-    read_socket(&tx);
+    read_socket(&tx)?;
+    Ok(())
 }
